@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Liga de Carreras</title>
+<style>
+:root{color-scheme:dark}
+body{font:15px system-ui,sans-serif;background:#14181f;color:#e8ecf1;max-width:900px;margin:auto;padding:16px}
+.c{background:#1e2530;border-radius:10px;padding:12px;margin:8px 0}
+.g{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px}.g .c{margin:0}
+button,input{font:inherit;padding:6px 10px;border-radius:6px;border:1px solid #3a4658;background:#2a3444;color:inherit}
+button{cursor:pointer}button:disabled{opacity:.4;cursor:default}
+.bar{height:8px;background:#0006;border-radius:4px;margin:3px 0 6px}.bar i{display:block;height:100%;background:#4fc3f7;border-radius:4px}
+.lane{position:relative;height:30px;border-bottom:1px dashed #3a4658}.lane b{position:absolute;top:4px;white-space:nowrap}
+.err{color:#ff8a80}table{width:100%;border-collapse:collapse}td{padding:4px;border-bottom:1px solid #2f3947}
+</style></head><body>
+<h1>🏇 Liga de Carreras</h1><div id="app"></div>
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const $ = s => document.querySelector(s), app = $('#app');
+const L = { speed: 'Velocidad', power: 'Fuerza', stamina: 'Resistencia' };
+let tok = localStorage.tok, me = localStorage.me, S = null, sock, msg = '', busy = false, shown = 0, animRound = 0;
+
+async function auth(kind) {
+  const r = await fetch('/api/' + kind, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ nombre: $('#n').value, password: $('#p').value }) });
+  const j = await r.json();
+  if (j.error) { msg = j.error; return view(); }
+  tok = localStorage.tok = j.token; me = localStorage.me = j.nombre; msg = ''; connect();
+}
+function connect() {
+  sock = io({ auth: { token: tok } });
+  sock.on('connect_error', () => { delete localStorage.tok; tok = null; view(); });
+  sock.on('state', s => { S = s; if (!busy) view(); });
+  sock.on('left', () => { S = null; view(); });
+  view();
+}
+const act = (ev, arg) => sock.emit(ev, arg, r => { msg = (r && r.error) || ''; view(); });
+const logout = () => { delete localStorage.tok; location.reload(); };
+
+function anim() {
+  const R = S.results.filter(r => !r.dns);
+  if (!R.length) { shown = S.round; busy = false; return view(); }
+  const mn = Math.min(...R.filter(r => !r.dnf).map(r => r.time)), T = 9000, t0 = performance.now();
+  const dur = r => r.time / mn * T;
+  $('#track').innerHTML = R.map((r, i) => `<div class="lane"><b id="h${i}">🐎 ${r.name}</b></div>`).join('');
+  const end = Math.max(...R.filter(r => !r.dnf).map(dur)) + 500;
+  (function f(now) {
+    const e = now - t0;
+    R.forEach((r, i) => {
+      const p = Math.min(r.dnf ? r.stopAt : 1, e / dur(r));
+      const el = $('#h' + i); if (el) el.style.left = (p * 82) + '%';
+    });
+    if (e < end) requestAnimationFrame(f); else { busy = false; shown = S.round; view(); }
+  })(t0);
+}
+
+function view() {
+  if (!tok) return app.innerHTML = `<div class="c"><input id="n" placeholder="Usuario"> <input id="p" type="password" placeholder="Contraseña">
+    <button onclick="auth('login')">Entrar</button> <button onclick="auth('register')">Registrarse</button><p class="err">${msg}</p></div>`;
+  if (!S) return app.innerHTML = `<div class="c">Hola <b>${me}</b> <button onclick="logout()">Salir</button></div>
+    <div class="c"><button onclick="act('create')">Crear sala</button> <input id="code" placeholder="CÓDIGO" size="6" maxlength="4">
+    <button onclick="act('join',$('#code').value)">Unirse</button><p class="err">${msg}</p></div>`;
+
+  const you = S.players.find(p => p.name === me), H = you.horse, d = S.race && S.race.distance, P = S.phase;
+  let h = `<div class="c">Sala <b>${S.code}</b> · Ronda ${S.round}/${S.rounds} <button onclick="act('leave')">Salir</button></div>
+  <div class="g">${S.players.map(p => `<div class="c"><b>${p.name}${p.online ? '' : ' (desconectado)'}</b> ${p.ready && P !== 'lobby' && P !== 'end' ? '✅' : ''}<br>
+    💰 ${p.coins} · 🏆 ${p.points} pts<br>🐴 ${p.horse.name} · valor ${p.value} · ${p.horse.wins} vic.${p.horse.out ? ' 🤕' : ''}</div>`).join('')}</div>`;
+
+  if (P === 'lobby') h += `<div class="c">${S.players.length}/4 jugadores. ${S.host === me
+    ? `<button onclick="act('start')">Empezar partida</button>` : 'Esperando al anfitrión…'} Comparte el código <b>${S.code}</b>.</div>`;
+
+  if (P === 'market') h += `<div class="c"><b>Carrera de ${d} m</b> — ${d < 1600 ? 'corta: pesan velocidad y fuerza' : d >= 2400 ? 'larga: pesa la resistencia' : 'media: equilibrada'}</div>
+  <div class="c"><b>${H.name}</b> · valor ${you.value} · ${H.wins} victorias
+    ${H.out ? '· 🤕 LESIONADO: no correrá esta ronda (puedes venderlo)' : ''}
+    ${H.debuff ? `· ⚠️ ${L[H.debuff.stat]} -${H.debuff.amt} (${H.debuff.rounds} rondas)` : ''}
+    ${Object.keys(L).map(k => `<div>${L[k]}: ${H.eff[k]}${H.eff[k] < H[k] ? ' (base ' + H[k] + ')' : ''}
+      <div class="bar"><i style="width:${H.eff[k]}%"></i></div>
+      <button ${you.coins < H.up[k] || H[k] >= 100 ? 'disabled' : ''} onclick="act('upgrade','${k}')">+3 (${H.up[k]} 💰)</button></div>`).join('')}
+    <p><button ${you.coins + H.sell < S.newCost ? 'disabled' : ''} onclick="if(confirm('¿Vender y comprar un caballo aleatorio?'))act('replace')">
+      Vender (${H.sell} 💰) y comprar nuevo (${S.newCost} 💰)</button></p>
+    <button ${you.ready ? 'disabled' : ''} onclick="act('ready')">${you.ready ? 'Esperando al resto…' : '¡Listo!'}</button></div>`;
+
+  if (P === 'results') {
+    const done = shown === S.round;
+    h += `<div class="c"><b>Carrera de ${d} m</b><div id="track"></div>${done ? `<table>${S.results.map(r => `<tr><td>${r.pos ? r.pos + 'º' : '—'}</td>
+      <td>${r.name} (${r.horse})</td><td>${r.dns ? 'no corre (lesionado)' : r.dnf ? '🚑 abandona (lesión grave)' : r.time.toFixed(2) + ' s' + (r.injury ? ' · lesión leve' : '')}</td>
+      <td>+${r.prize || 0} 💰</td></tr>`).join('')}</table>
+      <p><button ${you.ready ? 'disabled' : ''} onclick="act('ready')">${S.round >= S.rounds ? 'Ver resultado final' : 'Siguiente ronda'}</button></p>` : ''}</div>`;
+  }
+  if (P === 'end') h += `<div class="c"><h2>🏆 Clasificación final</h2><table>${[...S.players].sort((a, b) => b.points - a.points || b.coins - a.coins)
+    .map((p, i) => `<tr><td>${i + 1}º</td><td>${p.name}</td><td>${p.points} pts</td><td>${p.coins} 💰</td></tr>`).join('')}</table></div>`;
+
+  h += `<p class="err">${msg}</p>`;
+  const needAnim = P === 'results' && animRound !== S.round;
+  if (needAnim) { animRound = S.round; busy = true; }
+  app.innerHTML = h;
+  if (needAnim) anim();
+}
+tok ? connect() : view();
+</script></body></html>
