@@ -191,11 +191,13 @@ io.on('connection', s => {
   if (existing) enter(existing);
 
   let lastMsg = 0; s.emit('chatlog', chatLog);
-  s.on('chat', t => {
+  s.on('chat', p => {
+    let t = typeof p === 'string' ? p : p && p.t, img = p && p.img;
     t = String(t || '').trim().slice(0, 200);
-    if (!t || Date.now() - lastMsg < 800) return;
+    img = typeof img === 'string' && img.length < 300000 && /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(img) ? img : null;
+    if ((!t && !img) || Date.now() - lastMsg < 800) return;
     lastMsg = Date.now();
-    const m = { n: u.nombre, t }; chatLog.push(m); if (chatLog.length > 50) chatLog.shift();
+    const m = { n: u.nombre, t, img }; chatLog.push(m); if (chatLog.length > 50) chatLog.shift();
     io.emit('chat', m);
   });
   on('heal', () => {

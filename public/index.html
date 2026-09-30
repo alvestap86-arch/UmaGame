@@ -10,7 +10,11 @@ button,input{font:inherit;padding:6px 10px;border-radius:6px;border:1px solid #3
 button{cursor:pointer}button:disabled{opacity:.4;cursor:default}
 .bar{height:8px;background:#0006;border-radius:4px;margin:3px 0 6px}.bar i{display:block;height:100%;background:#4fc3f7;border-radius:4px}
 .lane{position:relative;height:30px;border-bottom:1px dashed #3a4658}.lane b{position:absolute;top:4px;white-space:nowrap}
-.err{color:#ff8a80}table{width:100%;border-collapse:collapse}td{padding:4px;border-bottom:1px solid #2f3947}
+.err{color:#ff8a80}
+#chatlog{height:220px;overflow-y:auto;overflow-x:hidden;margin:6px 0;background:#0003;border-radius:8px;padding:6px}
+#chatlog>div{overflow-wrap:anywhere;word-break:break-word;white-space:pre-wrap;margin-bottom:4px}
+#chatlog img{display:block;max-width:100%;max-height:220px;margin-top:4px;border-radius:6px}
+.cbox{display:flex;gap:6px}.cbox input[type=text]{flex:1;min-width:0}table{width:100%;border-collapse:collapse}td{padding:4px;border-bottom:1px solid #2f3947}
 </style></head><body>
 <h1>🏇 Liga de Carreras</h1><div id="app"></div>
 <script src="/socket.io/socket.io.js"></script>
@@ -23,9 +27,23 @@ let CH = [];
 const esc = t => String(t).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
 function drawChat() {
   const el = $('#chatlog'); if (!el) return;
-  el.innerHTML = CH.map(m => `<div><b>${esc(m.n)}:</b> ${esc(m.t)}</div>`).join(''); el.scrollTop = el.scrollHeight;
+  el.innerHTML = CH.map(m => `<div><b>${esc(m.n)}:</b> ${esc(m.t || '')}${m.img && m.img.startsWith('data:image/jpeg;base64,') ? `<img src="${m.img}" onload="$('#chatlog').scrollTop=1e9">` : ''}</div>`).join(''); el.scrollTop = el.scrollHeight;
 }
 function say() { const i = $('#ci'); if (i && i.value.trim()) { sock.emit('chat', i.value); i.value = ''; } }
+function sendImg(f) {
+  if (!f || !f.type.startsWith('image/')) return;
+  const im = new Image(), url = URL.createObjectURL(f);
+  im.onload = () => {
+    const k = Math.min(1, 640 / Math.max(im.width, im.height)), cv = document.createElement('canvas');
+    cv.width = Math.round(im.width * k); cv.height = Math.round(im.height * k);
+    const g = cv.getContext('2d'); g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height); g.drawImage(im, 0, 0, cv.width, cv.height);
+    URL.revokeObjectURL(url);
+    const d = cv.toDataURL('image/jpeg', .7), i = $('#ci');
+    if (d.length > 290000) return alert('Imagen demasiado grande');
+    sock.emit('chat', { t: i ? i.value : '', img: d }); if (i) i.value = '';
+  };
+  im.src = url;
+}
 async function auth(kind) {
   const r = await fetch('/api/' + kind, { method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ nombre: $('#n').value.trim(), password: $('#p').value }) });
@@ -84,8 +102,10 @@ function view() {
   if (!S) return app.innerHTML = `<div class="c">Hola <b>${me}</b> <button onclick="logout()">Salir</button></div>
     <div class="c"><button onclick="act('create')">Crear sala</button> <input id="code" placeholder="CÓDIGO" size="6" maxlength="4">
     <button onclick="act('join',$('#code').value)">Unirse</button><p class="err">${msg}</p></div>
-    <div class="c"><b>💬 Chat global</b><div id="chatlog" style="height:180px;overflow:auto;margin:6px 0"></div>
-    <input id="ci" style="width:70%" maxlength="200" placeholder="Escribe un mensaje…" onkeydown="if(event.key==='Enter')say()"> <button onclick="say()">Enviar</button></div>`, drawChat();
+    <div class="c"><b>💬 Chat global</b><div id="chatlog"></div>
+    <div class="cbox"><input id="ci" type="text" maxlength="200" placeholder="Escribe un mensaje…" onkeydown="if(event.key==='Enter')say()">
+    <button onclick="$('#cf').click()" title="Enviar imagen">📷</button><input id="cf" type="file" accept="image/*" hidden onchange="sendImg(this.files[0]);this.value=''">
+    <button onclick="say()">Enviar</button></div></div>`, drawChat();
 
   const you = S.players.find(p => p.name === me), H = you.horse, d = S.race && S.race.distance, P = S.phase;
   let h = `<div class="c">Sala <b>${S.code}</b> · Ronda ${S.round}/${S.rounds} <button onclick="act('leave')">Salir</button></div>
