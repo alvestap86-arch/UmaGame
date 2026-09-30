@@ -36,24 +36,40 @@ function connect() {
 const act = (ev, arg) => sock.emit(ev, arg, r => { msg = (r && r.error) || ''; view(); });
 const logout = () => { delete localStorage.tok; location.reload(); };
 
+const COL = ['#ef5350', '#42a5f5', '#66bb6a', '#ffca28'], CX = 300, CY = 150, A = 150, R0 = 70, LW = 13;
+function pos(u, R) { // u en [0,1): 0 = meta (arriba centro), sentido horario, pista en óvalo
+  const s = u * (4 * A + 2 * Math.PI * R);
+  if (s < A) return [CX + s, CY - R];
+  if (s < A + Math.PI * R) { const t = -Math.PI / 2 + (s - A) / R; return [CX + A + R * Math.cos(t), CY + R * Math.sin(t)]; }
+  const b = s - A - Math.PI * R;
+  if (b < 2 * A) return [CX + A - b, CY + R];
+  if (b < 2 * A + Math.PI * R) { const t = Math.PI / 2 + (b - 2 * A) / R; return [CX - A + R * Math.cos(t), CY + R * Math.sin(t)]; }
+  return [CX - A + (b - 2 * A - Math.PI * R), CY - R];
+}
 function anim() {
   const R = S.results.filter(r => !r.dns);
   if (!R.length) { shown = S.round; busy = false; return view(); }
-  const mn = Math.min(...R.filter(r => !r.dnf).map(r => r.time)), T = 9000, t0 = performance.now();
-  const dur = r => r.time / mn * T;
-  $('#track').innerHTML = R.map((r, i) => `<div class="lane"><b id="h${i}">🐎 ${r.name}</b></div>`).join('');
-  const end = Math.max(...R.filter(r => !r.dnf).map(dur)) + 500;
+  const fin = R.filter(r => !r.dnf), base = fin.length ? fin : R, mn = Math.min(...base.map(r => r.time)), T = 10000, t0 = performance.now();
+  const laps = S.race.distance / 1600, u0 = (1 - laps % 1) % 1, dur = r => r.time / mn * T;
+  const ci = r => S.players.findIndex(p => p.name === r.name);
+  $('#track').innerHTML = `<svg viewBox="0 0 600 300" style="width:100%;max-width:640px">
+    <rect x="25" y="25" width="550" height="250" rx="125" fill="#3b5d3a"/><rect x="80" y="80" width="440" height="140" rx="70" fill="#14181f"/>
+    <line x1="300" y1="25" x2="300" y2="80" stroke="#fff" stroke-width="3"/>
+    ${R.map((r, i) => `<circle id="h${i}" r="7" fill="${COL[ci(r)]}" stroke="#fff"/>`).join('')}</svg>
+    <div>${R.map(r => `<span style="color:${COL[ci(r)]}">● ${r.name} (${r.horse})</span>`).join(' &nbsp; ')}</div>`;
+  const end = Math.max(...base.map(dur)) + 500;
   (function f(now) {
     const e = now - t0;
     R.forEach((r, i) => {
-      const p = Math.min(r.dnf ? r.stopAt : 1, e / dur(r));
-      const el = $('#h' + i); if (el) el.style.left = (p * 82) + '%';
+      const p = Math.min(r.dnf ? r.stopAt : 1, e / dur(r)), [x, y] = pos((u0 + p * laps) % 1, R0 + 8 + ci(r) * LW);
+      const el = $('#h' + i); if (el) { el.setAttribute('cx', x); el.setAttribute('cy', y); }
     });
     if (e < end) requestAnimationFrame(f); else { busy = false; shown = S.round; view(); }
   })(t0);
 }
 
 function view() {
+  if (busy) return;
   if (!tok) return app.innerHTML = `<div class="c"><input id="n" placeholder="Usuario"> <input id="p" type="password" placeholder="Contraseña">
     <button onclick="auth('login')">Entrar</button> <button onclick="auth('register')">Registrarse</button><p class="err">${msg}</p></div>`;
   if (!S) return app.innerHTML = `<div class="c">Hola <b>${me}</b> <button onclick="logout()">Salir</button></div>
@@ -74,7 +90,7 @@ function view() {
     ${H.debuff ? `· ⚠️ ${L[H.debuff.stat]} -${H.debuff.amt} (${H.debuff.rounds} rondas)` : ''}
     ${Object.keys(L).map(k => `<div>${L[k]}: ${H.eff[k]}${H.eff[k] < H[k] ? ' (base ' + H[k] + ')' : ''}
       <div class="bar"><i style="width:${H.eff[k]}%"></i></div>
-      <button ${you.coins < H.up[k] || H[k] >= 100 ? 'disabled' : ''} onclick="act('upgrade','${k}')">+3 (${H.up[k]} 💰)</button></div>`).join('')}
+      <button ${you.coins < H.up[k] || H[k] >= 100 ? 'disabled' : ''} onclick="act('upgrade','${k}')">+${H.gain[k]} (${H.up[k]} 💰)</button></div>`).join('')}
     <p><button ${you.coins + H.sell < S.newCost ? 'disabled' : ''} onclick="if(confirm('¿Vender y comprar un caballo aleatorio?'))act('replace')">
       Vender (${H.sell} 💰) y comprar nuevo (${S.newCost} 💰)</button></p>
     <button ${you.ready ? 'disabled' : ''} onclick="act('ready')">${you.ready ? 'Esperando al resto…' : '¡Listo!'}</button></div>`;

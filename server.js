@@ -3,10 +3,10 @@ const Database = require('better-sqlite3'), bcrypt = require('bcryptjs'), jwt = 
 
 // ---- Configuración de juego ----
 const SECRET = process.env.SECRET || 'cambia-esto', PORT = process.env.PORT || 3000;
-const ROUNDS = 5, START = 300, NEW_COST = 120, STEP = 3, CAP = 100, INJ = 0.06;
-const PRIZE = [150, 90, 50, 30], PTS = [5, 3, 2, 1], DIST = [1200, 1600, 2000, 2400, 3000];
+const ROUNDS = 5, START = 300, NEW_COST = 120, CAP = 100;
+const PRIZE = [150, 90, 50, 30], PTS = [5, 3, 2, 1], SHORT = [1000, 1200, 1400], MID = [1600, 1800, 2000, 2200], LONG = [2400, 2800, 3200];
 const STATS = ['speed', 'power', 'stamina'];
-const NAMES = ['Relámpago', 'Bucéfalo', 'Sombra', 'Trueno', 'Azabache', 'Céfiro', 'Centella', 'Mistral', 'Rocinante', 'Tormenta'];
+const NAMES = ['Agnes Digital', 'Agnes Tachyon', 'Air Groove', 'Biwa Hayahide', 'Curren Chan', 'Daiwa Scarlet', 'El Condor Pasa', 'Fine Motion', 'Fuji Kiseki', 'Gold Ship', 'Grass Wonder', 'Hishi Amazon', 'Maruzensky', 'Mayano Top Gun', 'Mejiro McQueen', 'Mejiro Ryan', 'Mihono Bourbon', 'Narita Brian', 'Oguri Cap', 'Sakura Bakushin O', 'Seiun Sky', 'Silence Suzuka', 'Special Week', 'Symboli Rudolf', 'T.M. Opera O', 'Taiki Shuttle', 'Tamamo Cross', 'Tokai Teio', 'Vodka', 'Winning Ticket'];
 
 // ---- Base de datos ----
 const db = new Database('liga.db');
@@ -43,24 +43,31 @@ const R = (a, b) => Math.floor(Math.random() * (b - a + 1)) + a;
 const newHorse = () => ({ name: NAMES[R(0, NAMES.length - 1)], speed: R(25, 55), power: R(25, 55), stamina: R(25, 55), wins: 0, debuff: null, outRounds: 0 });
 const eff = (h, s) => h[s] - (h.debuff && h.debuff.stat === s ? h.debuff.amt : 0);
 const value = h => 50 + Math.round((h.speed + h.power + h.stamina) * 1.5) + h.wins * 40; // base + stats + victorias
-const upCost = (h, s) => 15 + Math.round(h[s] * 1.2);
+const upCost = (h, s) => 12 + Math.round(h[s] * h[s] / 45);
+const gain = x => x < 50 ? 4 : x < 70 ? 3 : 2; // rendimientos decrecientes
 const sellPrice = h => Math.round(value(h) * 0.7);
-const hv = h => ({ ...h, eff: Object.fromEntries(STATS.map(s => [s, eff(h, s)])), up: Object.fromEntries(STATS.map(s => [s, upCost(h, s)])), sell: sellPrice(h), out: h.outRounds > 0 });
+const hv = h => ({ ...h, eff: Object.fromEntries(STATS.map(s => [s, eff(h, s)])), up: Object.fromEntries(STATS.map(s => [s, upCost(h, s)])), gain: Object.fromEntries(STATS.map(s => [s, gain(h[s])])), sell: sellPrice(h), out: h.outRounds > 0 });
+
+// Distancias: siempre 1 corta, 1 media, 1 larga y 2 libres, barajadas y sin repetir seguidas
+const pick = a => a[R(0, a.length - 1)], shuffle = a => a.map(x => [Math.random(), x]).sort((a, b) => a[0] - b[0]).map(x => x[1]);
+const mkDists = () => { let d; do d = shuffle([pick(SHORT), pick(MID), pick(LONG), pick(SHORT.concat(MID, LONG)), pick(SHORT.concat(MID, LONG))]); while (d.some((x, i) => x === d[i - 1])); return d; };
 
 // ---- Simulación de carrera (el servidor decide todo) ----
 function simulate(r) {
-  const d = r.race.distance, t = (d - 1000) / 2000;             // 0 = muy corta, 1 = muy larga
-  const ws = .6 - .45 * t, wp = .3, wt = .1 + .55 * t, need = 25 + t * 45; // pesos y resistencia mínima
+  const d = r.race.distance, t = Math.min(1, Math.max(0, (d - 1000) / 2200));  // 0 = corta, 1 = larga
+  const w = { speed: .55 - .4 * t, power: .3, stamina: .15 + .4 * t };   // pesos según distancia
+  const req = { speed: 65 - 40 * t, power: 38, stamina: 20 + 50 * t };   // mínimos: penalizan especializarse en una sola stat
+  const soft = x => x <= 60 ? x : 60 + (x - 60) * .5;                     // rendimientos decrecientes
   const res = [];
   for (const p of r.players) {
     const h = p.horse, e = k => eff(h, k);
     if (h.outRounds > 0) { h.outRounds--; res.push({ id: p.id, name: p.name, horse: h.name, dns: true }); continue; }
-    let perf = (ws * e('speed') + wp * e('power') + wt * e('stamina')) / (ws + wp + wt)
-      - Math.max(0, need - e('stamina')) * .5      // fatiga si falta resistencia
-      + (Math.random() * 2 - 1) * 4;               // suerte limitada (±4)
+    let perf = STATS.reduce((a, k) => a + w[k] * soft(e(k)), 0)
+      - STATS.reduce((a, k) => a + Math.max(0, req[k] - e(k)), 0) * .45
+      + (Math.random() * 2 - 1) * 5;               // suerte limitada (±5)
     if (h.debuff && --h.debuff.rounds <= 0) h.debuff = null;
     const o = { id: p.id, name: p.name, horse: h.name, injury: null, dnf: false, stopAt: 1 };
-    if (Math.random() < INJ) {
+    if (Math.random() < .07 + .06 * t) {
       o.injury = Math.random() < .3 ? 'grave' : 'leve';
       if (o.injury === 'grave') { o.dnf = true; o.stopAt = .3 + Math.random() * .5; h.outRounds = 1; }
       else { perf *= .85; h.debuff = { stat: STATS[R(0, 2)], amt: 6, rounds: 2 }; }
@@ -88,7 +95,7 @@ const pub = r => ({
 });
 const push = r => io.to(r.code).emit('state', pub(r));
 function startRound(r) {
-  r.round++; r.phase = 'market'; r.results = null; r.race = { distance: DIST[R(0, DIST.length - 1)] };
+  r.round++; r.phase = 'market'; r.results = null; r.race = { distance: r.dists[r.round - 1] };
   r.players.forEach(p => p.ready = false); push(r);
 }
 function finish(r) {
@@ -118,7 +125,7 @@ io.on('connection', s => {
   on('create', () => {
     if (room) return 'Ya estás en una sala';
     let c; do c = Array.from({ length: 4 }, () => 'ABCDEFGHJKLMNPQRSTUVWXYZ'[R(0, 23)]).join(''); while (rooms.has(c));
-    const r = { code: c, host: u.id, phase: 'lobby', round: 0, players: [np()], results: null, race: null };
+    const r = { code: c, host: u.id, phase: 'lobby', round: 0, players: [np()], results: null, race: null, dists: mkDists() };
     rooms.set(c, r); enter(r);
   });
   on('join', c => {
@@ -140,7 +147,7 @@ io.on('connection', s => {
     const p = me(), h = p.horse, c = upCost(h, k);
     if (h[k] >= CAP) return 'Ya está al máximo';
     if (p.coins < c) return 'Monedas insuficientes';
-    p.coins -= c; h[k] = Math.min(CAP, h[k] + STEP); tx(room, p, 'mejora_' + k, -c); push(room);
+    p.coins -= c; h[k] = Math.min(CAP, h[k] + gain(h[k])); tx(room, p, 'mejora_' + k, -c); push(room);
   });
   on('replace', () => {
     const e = market(); if (e) return e;
