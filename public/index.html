@@ -19,9 +19,16 @@ const $ = s => document.querySelector(s), app = $('#app');
 const L = { speed: 'Velocidad', power: 'Fuerza', stamina: 'Resistencia' };
 let tok = localStorage.tok, me = localStorage.me, S = null, sock, msg = '', busy = false, shown = 0, animRound = 0;
 
+let CH = [];
+const esc = t => String(t).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+function drawChat() {
+  const el = $('#chatlog'); if (!el) return;
+  el.innerHTML = CH.map(m => `<div><b>${esc(m.n)}:</b> ${esc(m.t)}</div>`).join(''); el.scrollTop = el.scrollHeight;
+}
+function say() { const i = $('#ci'); if (i && i.value.trim()) { sock.emit('chat', i.value); i.value = ''; } }
 async function auth(kind) {
   const r = await fetch('/api/' + kind, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ nombre: $('#n').value, password: $('#p').value }) });
+    body: JSON.stringify({ nombre: $('#n').value.trim(), password: $('#p').value }) });
   const j = await r.json();
   if (j.error) { msg = j.error; return view(); }
   tok = localStorage.tok = j.token; me = localStorage.me = j.nombre; msg = ''; connect();
@@ -31,6 +38,8 @@ function connect() {
   sock.on('connect_error', () => { delete localStorage.tok; tok = null; view(); });
   sock.on('state', s => { S = s; if (!busy) view(); });
   sock.on('left', () => { S = null; view(); });
+  sock.on('chatlog', l => { CH = l; drawChat(); });
+  sock.on('chat', m => { CH.push(m); if (CH.length > 50) CH.shift(); drawChat(); });
   view();
 }
 const act = (ev, arg) => sock.emit(ev, arg, r => { msg = (r && r.error) || ''; view(); });
@@ -74,32 +83,37 @@ function view() {
     <button onclick="auth('login')">Entrar</button> <button onclick="auth('register')">Registrarse</button><p class="err">${msg}</p></div>`;
   if (!S) return app.innerHTML = `<div class="c">Hola <b>${me}</b> <button onclick="logout()">Salir</button></div>
     <div class="c"><button onclick="act('create')">Crear sala</button> <input id="code" placeholder="CÓDIGO" size="6" maxlength="4">
-    <button onclick="act('join',$('#code').value)">Unirse</button><p class="err">${msg}</p></div>`;
+    <button onclick="act('join',$('#code').value)">Unirse</button><p class="err">${msg}</p></div>
+    <div class="c"><b>💬 Chat global</b><div id="chatlog" style="height:180px;overflow:auto;margin:6px 0"></div>
+    <input id="ci" style="width:70%" maxlength="200" placeholder="Escribe un mensaje…" onkeydown="if(event.key==='Enter')say()"> <button onclick="say()">Enviar</button></div>`, drawChat();
 
   const you = S.players.find(p => p.name === me), H = you.horse, d = S.race && S.race.distance, P = S.phase;
   let h = `<div class="c">Sala <b>${S.code}</b> · Ronda ${S.round}/${S.rounds} <button onclick="act('leave')">Salir</button></div>
   <div class="g">${S.players.map(p => `<div class="c"><b>${p.name}${p.online ? '' : ' (desconectado)'}</b> ${p.ready && P !== 'lobby' && P !== 'end' ? '✅' : ''}<br>
-    💰 ${p.coins} · 🏆 ${p.points} pts<br>🐴 ${p.horse.name} · valor ${p.value} · ${p.horse.wins} vic.${p.horse.out ? ' 🤕' : ''}</div>`).join('')}</div>`;
+    💰 ${p.coins} · 🏆 ${p.points} pts<br>🐴 ${p.horse.name} · valor ${p.value} · ${p.horse.wins} vic.${p.horse.out ? ' 🤕' : ''}<br><small>✨ ${p.horse.sk.map(x => x.n).join(', ')}</small></div>`).join('')}</div>`;
 
   if (P === 'lobby') h += `<div class="c">${S.players.length}/4 jugadores. ${S.host === me
     ? `<button onclick="act('start')">Empezar partida</button>` : 'Esperando al anfitrión…'} Comparte el código <b>${S.code}</b>.</div>`;
 
-  if (P === 'market') h += `<div class="c"><b>Carrera de ${d} m</b> — ${d < 1600 ? 'corta: pesan velocidad y fuerza' : d >= 2400 ? 'larga: pesa la resistencia' : 'media: equilibrada'}</div>
-  <div class="c"><b>${H.name}</b> · valor ${you.value} · ${H.wins} victorias
+  if (P === 'market') h += `<div class="c"><b>Carrera de ${d} m</b> — ${d < 1600 ? 'corta: pesan velocidad y fuerza' : d >= 2400 ? 'larga: pesa la resistencia' : 'media: equilibrada'}<br>Pista <b>${S.race.cond}</b>: ${{ firme: 'favorece la velocidad', normal: 'sin efecto', pesada: 'favorece la fuerza' }[S.race.cond]}</div>
+  <div class="c"><b>${H.name}</b> · valor ${you.value} · ${H.wins} victorias<div style="margin:6px 0">${H.sk.map(x => `<div>✨ <b>${x.n}</b>: ${x.d}</div>`).join('')}<small>Máx. 2 habilidades: la propia y la heredada del caballo anterior.</small></div>
     ${H.out ? '· 🤕 LESIONADO: no correrá esta ronda (puedes venderlo)' : ''}
     ${H.debuff ? `· ⚠️ ${L[H.debuff.stat]} -${H.debuff.amt} (${H.debuff.rounds} rondas)` : ''}
     ${Object.keys(L).map(k => `<div>${L[k]}: ${H.eff[k]}${H.eff[k] < H[k] ? ' (base ' + H[k] + ')' : ''}
       <div class="bar"><i style="width:${H.eff[k]}%"></i></div>
       <button ${you.coins < H.up[k] || H[k] >= 100 ? 'disabled' : ''} onclick="act('upgrade','${k}')">+${H.gain[k]} (${H.up[k]} 💰)</button></div>`).join('')}
-    <p><button ${you.coins + H.sell < S.newCost ? 'disabled' : ''} onclick="if(confirm('¿Vender y comprar un caballo aleatorio?'))act('replace')">
+    <p><button ${you.coins + H.sell < S.newCost ? 'disabled' : ''} onclick="if(confirm('¿Vender y comprar un caballo aleatorio? El nuevo heredará la habilidad principal del actual.'))act('replace')">
       Vender (${H.sell} 💰) y comprar nuevo (${S.newCost} 💰)</button></p>
+    <p><button ${(!H.debuff && !H.out) || you.coins < 40 ? 'disabled' : ''} onclick="act('heal')">🩺 Veterinario (40 💰)</button>
+    <select id="bt">${S.players.map(p => `<option>${p.name}</option>`).join('')}</select>
+    <button ${you.hasBet || you.coins < 30 ? 'disabled' : ''} onclick="act('bet',$('#bt').value)">🎲 ${you.hasBet ? 'Apuesta hecha' : `Apostar 30 💰 (paga ${30 * S.players.length})`}</button></p>
     <button ${you.ready ? 'disabled' : ''} onclick="act('ready')">${you.ready ? 'Esperando al resto…' : '¡Listo!'}</button></div>`;
 
   if (P === 'results') {
     const done = shown === S.round;
     h += `<div class="c"><b>Carrera de ${d} m</b><div id="track"></div>${done ? `<table>${S.results.map(r => `<tr><td>${r.pos ? r.pos + 'º' : '—'}</td>
       <td>${r.name} (${r.horse})</td><td>${r.dns ? 'no corre (lesionado)' : r.dnf ? '🚑 abandona (lesión grave)' : r.time.toFixed(2) + ' s' + (r.injury ? ' · lesión leve' : '')}</td>
-      <td>+${r.prize || 0} 💰</td></tr>`).join('')}</table>
+      <td>+${r.prize || 0} 💰</td></tr>`).join('')}</table>${(S.bets || []).map(b => `<div>🎲 ${b.name} apostó por ${b.on}: ${b.won ? '✅ acierta' : '❌ falla'}</div>`).join('')}
       <p><button ${you.ready ? 'disabled' : ''} onclick="act('ready')">${S.round >= S.rounds ? 'Ver resultado final' : 'Siguiente ronda'}</button></p>` : ''}</div>`;
   }
   if (P === 'end') h += `<div class="c"><h2>🏆 Clasificación final</h2><table>${[...S.players].sort((a, b) => b.points - a.points || b.coins - a.coins)
